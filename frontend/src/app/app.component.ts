@@ -6,6 +6,8 @@ import { Subscription, interval, startWith, switchMap } from 'rxjs';
 interface Desk { number: number; ticket_id: number | null; ticket_number: string | null; status: string | null }
 interface Ticket { id: number; number: string; created_at: string }
 interface State { desks: Desk[]; available_desks: number; waiting_count: number; waiting: Ticket[] }
+const apiBaseUrl = (window as Window & { TURNERO_CONFIG?: { apiBaseUrl?: string } }).TURNERO_CONFIG?.apiBaseUrl ?? '';
+const apiUrl = (path: string) => `${apiBaseUrl}${path}`;
 
 @Component({ selector: 'app-root', standalone: true, imports: [CommonModule], template: `
   <header class="topbar"><a class="brand" href="#"><span class="brand-mark">B</span><span>Banco <b>Central</b></span></a><nav class="view-switch" aria-label="Cambiar vista"><button [class.selected]="view === 'client'" [attr.aria-pressed]="view === 'client'" (click)="setView('client')">Cliente</button><button [class.selected]="view === 'admin'" [attr.aria-pressed]="view === 'admin'" (click)="setView('admin')">Administrador</button></nav><span class="live"><i></i> Sistema en línea</span></header>
@@ -52,10 +54,10 @@ export class AppComponent implements OnInit, OnDestroy {
   get occupiedDesks(): Desk[] { return this.state?.desks.filter((desk) => desk.ticket_number !== null) ?? []; }
   get nextTicket(): string { return this.state?.waiting[0]?.number ?? '—'; }
   setView(view: 'client' | 'admin'): void { this.view = view; }
-  ngOnInit(): void { this.subscription = interval(1800).pipe(startWith(0), switchMap(() => this.http.get<State>('/api/state'))).subscribe({ next: (state) => this.state = state, error: () => this.showError('No se pudo conectar con el servidor. Inicia la API en localhost:8000.') }); }
+  ngOnInit(): void { this.subscription = interval(1800).pipe(startWith(0), switchMap(() => this.http.get<State>(apiUrl('/api/state')))).subscribe({ next: (state) => this.state = state, error: () => this.showError('No se pudo conectar con el servidor. Inicia la API en localhost:8000.') }); }
   ngOnDestroy(): void { this.subscription?.unsubscribe(); }
-  takeTicket(): void { this.issuing = true; this.error = ''; this.http.post<{number: string; desk: number | null}>('/api/tickets', {}).subscribe({ next: (ticket) => { this.lastTicket = ticket.number; this.lastDesk = ticket.desk; this.issuing = false; this.refresh(); }, error: () => { this.issuing = false; this.showError('No se pudo generar el turno. Intenta de nuevo.'); } }); }
-  finish(desk: number): void { this.http.post(`/api/desks/${desk}/complete`, {}).subscribe({ next: () => this.refresh(), error: () => this.showError('No se pudo finalizar la atención.') }); }
-  private refresh(): void { this.http.get<State>('/api/state').subscribe({ next: (state) => this.state = state }); }
+  takeTicket(): void { this.issuing = true; this.error = ''; this.http.post<{number: string; desk: number | null}>(apiUrl('/api/tickets'), {}).subscribe({ next: (ticket) => { this.lastTicket = ticket.number; this.lastDesk = ticket.desk; this.issuing = false; this.refresh(); }, error: () => { this.issuing = false; this.showError('No se pudo generar el turno. Intenta de nuevo.'); } }); }
+  finish(desk: number): void { this.http.post(apiUrl(`/api/desks/${desk}/complete`), {}).subscribe({ next: () => this.refresh(), error: () => this.showError('No se pudo finalizar la atención.') }); }
+  private refresh(): void { this.http.get<State>(apiUrl('/api/state')).subscribe({ next: (state) => this.state = state }); }
   private showError(message: string): void { this.error = message; setTimeout(() => this.error = '', 5000); }
 }
