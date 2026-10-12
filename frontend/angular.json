@@ -10,7 +10,7 @@
       "prefix": "app",
       "architect": {
         "build": { "builder": "@angular/build:application", "options": { "outputPath": "dist/turnero", "index": "src/index.html", "browser": "src/main.ts", "polyfills": ["zone.js"], "tsConfig": "tsconfig.app.json", "styles": ["src/styles.css"], "assets": [{ "glob": "**/*", "input": "public" }] }, "configurations": { "production": { "optimization": true, "outputHashing": "all" } }, "defaultConfiguration": "production" },
-        "serve": { "builder": "@angular/build:dev-server", "options": { "buildTarget": "turnero:build", "proxyConfig": "proxy.conf.json" }, "configurations": { "production": { "buildTarget": "turnero:build:production" }, "development": { "buildTarget": "turnero:build" }, "defaultConfiguration": "development" } }
+        "serve": { "builder": "@angular/build:dev-server", "options": { "buildTarget": "turnero:build" }, "configurations": { "production": { "buildTarget": "turnero:build:production" }, "development": { "buildTarget": "turnero:build" }, "defaultConfiguration": "development" } }
       }
     }
   },

@@ -1,13 +1,12 @@
 import { CommonModule } from '@angular/common';
-import { HttpClient } from '@angular/common/http';
-import { Component, OnDestroy, OnInit, inject } from '@angular/core';
-import { Subscription, interval, startWith, switchMap } from 'rxjs';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 
 interface Desk { number: number; ticket_id: number | null; ticket_number: string | null; status: string | null }
 interface Ticket { id: number; number: string; created_at: string }
 interface State { desks: Desk[]; available_desks: number; waiting_count: number; waiting: Ticket[] }
-const apiBaseUrl = (window as Window & { TURNERO_CONFIG?: { apiBaseUrl?: string } }).TURNERO_CONFIG?.apiBaseUrl ?? '';
-const apiUrl = (path: string) => `${apiBaseUrl}${path}`;
+interface StoredState { nextId: number; desks: Desk[]; waiting: Ticket[] }
+const STORAGE_KEY = 'turnero-bancario-state-v1';
+const createEmptyState = (): StoredState => ({ nextId: 1, desks: Array.from({ length: 4 }, (_, i) => ({ number: i + 1, ticket_id: null, ticket_number: null, status: null })), waiting: [] });
 
 @Component({ selector: 'app-root', standalone: true, imports: [CommonModule], template: `
   <header class="topbar"><a class="brand" href="#"><span class="brand-mark">B</span><span>Banco <b>Central</b></span></a><nav class="view-switch" aria-label="Cambiar vista"><button [class.selected]="view === 'client'" [attr.aria-pressed]="view === 'client'" (click)="setView('client')">Cliente</button><button [class.selected]="view === 'admin'" [attr.aria-pressed]="view === 'admin'" (click)="setView('admin')">Administrador</button></nav><span class="live"><i></i> Sistema en línea</span></header>
@@ -43,8 +42,8 @@ const apiUrl = (path: string) => `${apiBaseUrl}${path}`;
   </main>
 ` })
 export class AppComponent implements OnInit, OnDestroy {
-  private http = inject(HttpClient);
-  private subscription?: Subscription;
+  private channel?: BroadcastChannel;
+  private storageListener = (event: StorageEvent) => { if (event.key === STORAGE_KEY) this.loadState(); };
   state: State | null = null;
   view: 'client' | 'admin' = 'client';
   lastTicket = '';
@@ -54,10 +53,53 @@ export class AppComponent implements OnInit, OnDestroy {
   get occupiedDesks(): Desk[] { return this.state?.desks.filter((desk) => desk.ticket_number !== null) ?? []; }
   get nextTicket(): string { return this.state?.waiting[0]?.number ?? '—'; }
   setView(view: 'client' | 'admin'): void { this.view = view; }
-  ngOnInit(): void { this.subscription = interval(1800).pipe(startWith(0), switchMap(() => this.http.get<State>(apiUrl('/api/state')))).subscribe({ next: (state) => this.state = state, error: () => this.showError('No se pudo conectar con el servidor. Inicia la API en localhost:8000.') }); }
-  ngOnDestroy(): void { this.subscription?.unsubscribe(); }
-  takeTicket(): void { this.issuing = true; this.error = ''; this.http.post<{number: string; desk: number | null}>(apiUrl('/api/tickets'), {}).subscribe({ next: (ticket) => { this.lastTicket = ticket.number; this.lastDesk = ticket.desk; this.issuing = false; this.refresh(); }, error: () => { this.issuing = false; this.showError('No se pudo generar el turno. Intenta de nuevo.'); } }); }
-  finish(desk: number): void { this.http.post(apiUrl(`/api/desks/${desk}/complete`), {}).subscribe({ next: () => this.refresh(), error: () => this.showError('No se pudo finalizar la atención.') }); }
-  private refresh(): void { this.http.get<State>(apiUrl('/api/state')).subscribe({ next: (state) => this.state = state }); }
+  ngOnInit(): void {
+    this.loadState();
+    window.addEventListener('storage', this.storageListener);
+    if ('BroadcastChannel' in window) {
+      this.channel = new BroadcastChannel('turnero-bancario-updates');
+      this.channel.onmessage = () => this.loadState();
+    }
+  }
+  ngOnDestroy(): void { window.removeEventListener('storage', this.storageListener); this.channel?.close(); }
+  takeTicket(): void {
+    this.error = '';
+    try {
+      const stored = this.readStoredState();
+      const id = stored.nextId++;
+      const number = `T${String(id).padStart(3, '0')}`;
+      const desk = stored.desks.find((item) => item.ticket_id === null);
+      if (desk) { desk.ticket_id = id; desk.ticket_number = number; desk.status = 'serving'; }
+      else stored.waiting.push({ id, number, created_at: new Date().toISOString() });
+      this.saveState(stored);
+      this.lastTicket = number;
+      this.lastDesk = desk?.number ?? null;
+    } catch { this.showError('No se pudo guardar el turno en este navegador. Revisa el espacio disponible.'); }
+  }
+  finish(deskNumber: number): void {
+    try {
+      const stored = this.readStoredState();
+      const desk = stored.desks.find((item) => item.number === deskNumber);
+      if (!desk || desk.ticket_id === null) return;
+      const next = stored.waiting.shift();
+      if (next) { desk.ticket_id = next.id; desk.ticket_number = next.number; desk.status = 'serving'; }
+      else { desk.ticket_id = null; desk.ticket_number = null; desk.status = null; }
+      this.saveState(stored);
+    } catch { this.showError('No se pudo actualizar el estado guardado en este navegador.'); }
+  }
+  private loadState(): void {
+    try {
+      const stored = this.readStoredState();
+      this.state = { desks: stored.desks, available_desks: stored.desks.filter((desk) => desk.ticket_id === null).length, waiting_count: stored.waiting.length, waiting: stored.waiting };
+    } catch { this.state = { ...createEmptyState(), available_desks: 4, waiting_count: 0 }; this.showError('No se pudo leer el almacenamiento local del navegador.'); }
+  }
+  private readStoredState(): StoredState {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return createEmptyState();
+    const value = JSON.parse(raw) as StoredState;
+    if (!Number.isInteger(value.nextId) || !Array.isArray(value.desks) || value.desks.length !== 4 || !Array.isArray(value.waiting)) return createEmptyState();
+    return value;
+  }
+  private saveState(stored: StoredState): void { localStorage.setItem(STORAGE_KEY, JSON.stringify(stored)); this.loadState(); this.channel?.postMessage('updated'); }
   private showError(message: string): void { this.error = message; setTimeout(() => this.error = '', 5000); }
 }
